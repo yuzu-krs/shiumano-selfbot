@@ -1,0 +1,6 @@
+discord.py-self
+yt-dlp
+aiofiles
+dnspython
+aiosqlite
+psutil

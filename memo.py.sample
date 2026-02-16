@@ -1,0 +1,8 @@
+token = "Discord.Bot.Token"
+token_s = ""  # もう一つのアカウントのトークン
+deepl_token = "deepl.access-token"
+gas_api_url = "Gas-API-URL(変化部分のみ)"
+misskey_url = ""  # Misskeyアカウントのインスタンス
+misskey_token = ""  # Misskeyアカウントのトークン
+developer = (0,)  # %execや%shellの実行を許可するユーザーのID
+srv_dynmap = {}  # DiscordSRVのチャンネルとMCサーバーアドレスの対応表
