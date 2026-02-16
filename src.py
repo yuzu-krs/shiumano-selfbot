@@ -264,11 +264,13 @@ class MainSystem(commands.Cog):
             self.tasks = {}
             self.sub_account = sub_account
             self.sub_account_tasks = {}
+            self.bump_tasks = {}
             self.loop = bot.loop if loop is None else loop
         if not old is None:
             self.tasks = old.tasks
             self.sub_account = old.sub_account
             self.sub_account_tasks = old.sub_account_tasks
+            self.bump_tasks = old.bump_tasks
             self.loop = old.loop
 
     @property
@@ -1674,6 +1676,165 @@ class MainSystem(commands.Cog):
             content = content[:1900] + '...'
         content += '`' * 3
         await ctx.send(content)
+
+    @commands.command()
+    async def bump(self, ctx, *, arg=None):
+        """
+        ランダムなインターバルで /bump コマンドを繰り返し送信します
+        使用例: %bump random(7200, 9000)
+        """
+        if arg is None:
+            await ctx.send(
+                '❎ 引数を指定してください\n'
+                '使用例: `%bump random(7200, 9000)`'
+            )
+            return
+
+        # 引数をパース
+        match = re.match(r'random\(\s*(\d+)\s*,\s*(\d+)\s*\)', arg)
+        if not match:
+            await ctx.send(
+                '❎ 書式が正しくありません\n'
+                '使用例: `%bump random(7200, 9000)`'
+            )
+            return
+
+        min_interval = int(match.group(1))
+        max_interval = int(match.group(2))
+
+        # バリデーション
+        if min_interval <= 0:
+            await ctx.send('❎ 最小値は1以上を指定してください')
+            return
+        if min_interval > max_interval:
+            await ctx.send('❎ 最小値が最大値を超えています')
+            return
+
+        # 既存タスクがあればキャンセル
+        task_id = f"{ctx.guild.id}_{ctx.channel.id}"
+        if task_id in self.bump_tasks:
+            self.bump_tasks[task_id]['task'].cancel()
+
+        # 開始メッセージを送信
+        await ctx.send(
+            f'🔔 Bump自動送信を開始します\n'
+            f'⏰ インターバル: {min_interval}秒 〜 {max_interval}秒\n'
+            f'🔁 停止するまで繰り返し /bump を送信します\n'
+            f'🛑 停止: `%bumpcancel`'
+        )
+
+        channel = ctx.channel
+        bump_tasks = self.bump_tasks
+
+        # 無限ループの非同期タスク
+        async def bump_loop():
+            count = 0
+            try:
+                while True:
+                    # 毎回ランダムな待機時間を生成
+                    wait_seconds = random.randint(min_interval, max_interval)
+                    next_time = datetime.datetime.now() + datetime.timedelta(seconds=wait_seconds)
+
+                    # タスク情報を更新（次回送信時刻）
+                    if task_id in bump_tasks:
+                        bump_tasks[task_id]['next_bump'] = next_time
+                        bump_tasks[task_id]['count'] = count
+
+                    # 待機
+                    await asyncio.sleep(wait_seconds)
+
+                    # /bump を送信
+                    await channel.send('/bump')
+                    count += 1
+
+            except asyncio.CancelledError:
+                # キャンセル時は静かに終了
+                pass
+            except Exception as e:
+                await channel.send(
+                    f'❌ Bump自動送信中にエラーが発生しました: {e}\n'
+                    f'🔁 送信回数: {count}回'
+                )
+
+        # タスク開始
+        task = self.loop.create_task(bump_loop())
+
+        first_wait = random.randint(min_interval, max_interval)
+        self.bump_tasks[task_id] = {
+            'task': task,
+            'min_interval': min_interval,
+            'max_interval': max_interval,
+            'channel_id': ctx.channel.id,
+            'author_id': ctx.author.id,
+            'started_at': datetime.datetime.now(),
+            'next_bump': datetime.datetime.now() + datetime.timedelta(seconds=first_wait),
+            'count': 0
+        }
+
+    @commands.command()
+    async def bumpstatus(self, ctx):
+        """
+        実行中のbump自動送信の状態を表示します
+        """
+        if len(self.bump_tasks) == 0:
+            await ctx.send('⚠️ 実行中のbumpタスクはありません')
+            return
+
+        task_id = f"{ctx.guild.id}_{ctx.channel.id}"
+
+        if task_id not in self.bump_tasks:
+            await ctx.send('⚠️ このチャンネルで実行中のbumpタスクはありません')
+            return
+
+        info = self.bump_tasks[task_id]
+        next_bump = info.get('next_bump')
+        remaining = (next_bump - datetime.datetime.now()).total_seconds()
+
+        if remaining > 0:
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            seconds = int(remaining % 60)
+            remaining_str = f'{hours}時間 {minutes}分 {seconds}秒'
+        else:
+            remaining_str = 'まもなく送信...'
+
+        await ctx.send(
+            f'🔁 Bump自動送信 実行中\n'
+            f'⏰ インターバル: {info["min_interval"]}秒 〜 {info["max_interval"]}秒\n'
+            f'📅 次回送信: {next_bump.strftime("%Y-%m-%d %H:%M:%S")}\n'
+            f'⏱️ 残り時間: {remaining_str}\n'
+            f'📊 送信回数: {info.get("count", 0)}回\n'
+            f'🕐 開始時刻: {info["started_at"].strftime("%Y-%m-%d %H:%M:%S")}'
+        )
+
+    @commands.command()
+    async def bumpcancel(self, ctx):
+        """
+        実行中のbump自動送信を停止します
+        """
+        if len(self.bump_tasks) == 0:
+            await ctx.send('⚠️ 停止できるbumpタスクがありません')
+            return
+
+        task_id = f"{ctx.guild.id}_{ctx.channel.id}"
+
+        if task_id not in self.bump_tasks:
+            await ctx.send('⚠️ このチャンネルで実行中のbumpタスクはありません')
+            return
+
+        info = self.bump_tasks[task_id]
+        count = info.get('count', 0)
+        started_at = info['started_at'].strftime('%Y-%m-%d %H:%M:%S')
+
+        # タスクをキャンセル
+        info['task'].cancel()
+        del self.bump_tasks[task_id]
+
+        await ctx.send(
+            f'🛑 Bump自動送信を停止しました\n'
+            f'📊 送信回数: {count}回\n'
+            f'🕐 稼働開始: {started_at}'
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message):
